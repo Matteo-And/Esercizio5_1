@@ -72,14 +72,14 @@ public class Translator {
                 error("Error in statlist");
         }
     }
-    public void statlistp(int prevLabel) {  ///L2:
+    public void statlistp(int prevLabel) {  //L2:
         switch (look.tag) {
             case ';':
                 //SL'->;S SL'
                 match(';');
-                int lstat= code.newLabel(); //2
-                stat(lstat);
-                code.emitLabel(lstat);
+                int lnext= code.newLabel(); //label prossima istruzione
+                stat(lnext);
+                code.emitLabel(lnext);
                 statlistp(prevLabel);
                 break;
             case '}':
@@ -93,101 +93,279 @@ public class Translator {
         }
     }
      
-    public void stat(int lstat) { //GOto
-        switch(look.tag) {
+    public void stat(int lnext) {
+        switch (look.tag) {
             case Tag.ASSIGN:
-              //S->assign E to IL
-              match(Tag.ASSIGN);
-              expr(); //ldc
-              match(Tag.TO);
-              idlist(); // istore
-              code.emit(OpCode.GOto,lstat);
-              break;
+                //S->assign E to IL
+                match(Tag.ASSIGN);
+                expr(); //ldc
+                match(Tag.TO);
+                idlist(); // istore
+                code.emit(OpCode.GOto, lnext);
+                break;
             case Tag.PRINT:
-              //S-> PRINT(EL)
-              match(Tag.PRINT);
-              match('(');
-              exprlist(); //iload -ldc - iadd
-              match(')');
-              code.emit(OpCode.invokestatic,1);
-              code.emit(OpCode.GOto,lstat);
-              break;
-          case Tag.READ:
-                //S->(IDL)
+                //S-> PRINT(EL)
+                match(Tag.PRINT);
+                match('(');
+                exprlist(); 
+                match(')');
+                code.emit(OpCode.invokestatic, 1);
+                code.emit(OpCode.GOto, lnext);
+                break;
+            case Tag.READ:
+                //S->READ(IDL)
                 match(Tag.READ);
                 code.emit(OpCode.invokestatic, 0); //invokestatic read()
                 match('(');
-	            idlist();
+                idlist();
                 match(')');
-                code.emit(OpCode.GOto,lstat); //GOTO L?
+                code.emit(OpCode.GOto, lnext); //GOTO L?
                 break;
-            
+
             case Tag.WHILE:
                 //S->while(BE)S
                 int lwhile;
-                if (lstat == 1) {
-                    lwhile = code.newLabel();
-                    code.emitLabel(lwhile); 
-                } else {
-                    lwhile=lstat-1;
-                }
                 match(Tag.WHILE);
+                if (lnext == 1) {
+                    lwhile = code.newLabel();
+                    code.emitLabel(lwhile);
+                } else {
+                    lwhile = lnext - 1;
+                }
                 match('(');
-                boolean bwhile=bexpr(); 
+                bexpr(lnext);
                 match(')');
-                if(bwhile==true) stat(lstat);
-                code.emit(OpCode.GOto,lwhile);
+                stat(lwhile);
+                //code.emitLabel(lnext);
                 break;
             case Tag.IF:
-              //if(BE) S S' end
-              match(Tag.IF);
-              match('(');
-              boolean bif = bexpr();
-              match(')');
-              if(bif==true) stat(lstat);
-              statp(bif,lstat);
-              match(Tag.END);
-              break;
+                //if(BE) S S' end
+                //if(< x 0) {...}
+                /*
+                    iload 0
+                    ilaod x
+                    isub
+                    if_lt stat():
+                    statp()
+                                 
+                    
+                    if
+                        bexpr(lstatp) < x 0
+                        if_ge lstatp
+                        stat(lstat)
+                    lstatp:
+                    else
+                        statp(lstat) --> goto lstat
+                    end
+                
+                    Lstat:
+                
+                
+                */
+                match(Tag.IF);
+                match('(');
+                int lstatp = code.newLabel(); //label dell'else (o nullo)
+                bexpr(lstatp);
+                match(')');
+                stat(lnext);
+                code.emitLabel(lstatp);
+                statp(lnext);
+                match(Tag.END);
+                break;
             case '{':
-              //S->{IL}
-              match('{');
-              idlist();
-              match('}');
-              break;
+                //S->{SL}
+                match('{');
+                statlist(lnext);
+                match('}');
+                break;
             default:
-              error("error in stat");
+                error("error in stat");
         }
      }
 
-    private void idlist() {
+    private void statp(int lnext) {
         switch(look.tag) {
-	    case Tag.ID:
-        	int id_addr = st.lookupAddress(((Word)look).lexeme);
-                if (id_addr==-1) {
-                    id_addr = count;
-                    st.insert(((Word)look).lexeme,count++);
-                }
-                match(Tag.ID);
-                code.emit(OpCode.istore);
-	    default:
-                error("error in idlist");
-    	}
+            case Tag.ELSE:
+                //S' -> else S
+                match(Tag.ELSE);
+                stat(lnext);
+                break;
+            case Tag.END:
+                //S' -> nullo
+                code.emit(OpCode.GOto, lnext);
+                break;
+            default:
+                error("error in statp");
+        }
     }
 
-    private void expr( /* completare */ ) {
-        switch(look.tag) {
-	// ... completare ...
+    private void idlist() {
+        switch (look.tag) {
+            case Tag.ID:
+                //IDL->ID IDL'
+                int id_addr = st.lookupAddress(((Word) look).lexeme);
+                if (id_addr == -1) {
+                    id_addr = count;
+                    st.insert(((Word) look).lexeme, count++);
+                }
+                match(Tag.ID);
+                code.emit(OpCode.istore, id_addr);
+                idlistp();
+                break;
+            default:
+                error("error in idlist");
+        }
+    }
+
+    private void idlistp() {
+        switch (look.tag) {
+            case ',':
+                //IDL' -> , ID IDL'
+                match(',');
+                
+                int id_addr = st.lookupAddress(((Word) look).lexeme);
+                    if (id_addr == -1) {
+                        id_addr = count;
+                        st.insert(((Word) look).lexeme, count++);
+                    }
+                match(Tag.ID);
+                code.emit(OpCode.istore, id_addr);
+                idlistp();
+                break;
+            case ')': 
+            case Tag.ELSE:
+            case Tag.END:
+            case '}':
+            case ';':
+            case Tag.EOF:
+                //IDL' -> nullo
+                break;
+            default:
+                error("error in idlistp");
+        }
+    }
+
+    private void bexpr(int lfalse) { //label a cui andare se è false 
+       switch (look.tag) {
+           case Tag.RELOP: //BE -> RELOP EE
+               switch (((Word) look).lexeme) {
+                   case "<":
+                    code.emit(OpCode.if_icmpge,lfalse);
+                       break;
+                   case ">":
+                    code.emit(OpCode.if_icmple,lfalse);
+                       break;
+                   case "<=":
+                    code.emit(OpCode.if_icmpgt,lfalse);
+                       break;
+                   case ">=":
+                    code.emit(OpCode.if_icmplt,lfalse);
+                       break;
+                   case "<>":
+                    code.emit(OpCode.if_icmpeq,lfalse);
+                       break;
+                   case "==":
+                    code.emit(OpCode.if_icmpne, lfalse);
+                       break;       
+                      
+                }
+                match(Tag.RELOP);
+                expr();
+                expr();
+            break;
+            default:
+                error("error in bexpr");
+        }
+    }
+
+    private void expr() {
+        switch (look.tag) {
+            // ... completare ...
+
+            case '+':
+                //E->+(EL)
+                match('+');
+                match('(');
+                int iadd_n=exprlist();
+                match(')');
+                if(iadd_n!=1)code.emit(OpCode.iadd);
+                break;
             case '-':
+                //E-> - E E
                 match('-');
                 expr();
                 expr();
                 code.emit(OpCode.isub);
                 break;
-	// ... completare ...
+            case '*': //E-> *(EL)
+                match('*');
+                match('(');
+                int imul_n=exprlist();
+                match(')');
+                if(imul_n!=1)code.emit(OpCode.imul);
+                break;
+            case '/': //E-> / E E
+                match('/');
+                match('(');
+                exprlist();
+                match(')');
+                code.emit(OpCode.idiv);
+                break;
+            case Tag.NUM:
+                code.emit(OpCode.ldc, ((NumberTok) look).lexeme);
+                match(Tag.NUM);
+                break;
+            case Tag.ID:
+                int id_addr = st.lookupAddress(((Word) look).lexeme);
+                if (id_addr == -1) {
+                    error("id does not exist");
+                }
+                code.emit(OpCode.iload, id_addr);
+                match(Tag.ID);
+                break;
+            default:
+                error("error in expr");
         }
     }
 
-    // ... completare ...
+     private int exprlist() { //ritorna il numero di valori di exprlist
+         int exprlist_n=0;
+         switch (look.tag) {
+            case '+':
+            case '-':
+            case '*':
+            case '/':
+            case Tag.NUM:
+            case Tag.ID:
+                //EL -> E EL'
+                expr();
+                exprlist_n++; 
+                exprlist_n+=exprlistp();
+                return exprlist_n;
+            default:
+                error("error in exprlist");
+                return 0;
+        }
+    }
+    // +(3,2,5)
+    private int exprlistp() {
+        int exprlistp_n = 0;
+        switch (look.tag) {
+            case ',':
+                //EL' -> , E EL'
+                match(',');
+                expr();
+                exprlistp_n++; 
+                exprlistp_n+=exprlistp(); 
+                return exprlistp_n;
+        case ')':
+            //EL-> nullo 
+            return 0;  
+        default:
+            error("error in exprlistp");
+            return 0;
+    }
+    }
    
  public static void main(String[] args){
       Lexer lex = new Lexer();
