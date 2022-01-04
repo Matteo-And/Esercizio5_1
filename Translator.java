@@ -66,7 +66,6 @@ public class Translator {
                 stat(lstat);
                 code.emitLabel(lstat);
                 statlistp(prevLabel);
-                code.emit(OpCode.GOto, prevLabel);
                 break;
             default:
                 error("Error in statlist");
@@ -100,16 +99,16 @@ public class Translator {
                 match(Tag.ASSIGN);
                 expr(); //ldc
                 match(Tag.TO);
-                idlist(); // istore
+                idlist(Tag.ASSIGN); // istore
                 code.emit(OpCode.GOto, lnext);
                 break;
             case Tag.PRINT:
                 //S-> PRINT(EL)
                 match(Tag.PRINT);
                 match('(');
-                exprlist(); 
+                exprlist(Tag.PRINT); 
                 match(')');
-                code.emit(OpCode.invokestatic, 1);
+               code.emit(OpCode.invokestatic, 1);
                 code.emit(OpCode.GOto, lnext);
                 break;
             case Tag.READ:
@@ -117,7 +116,7 @@ public class Translator {
                 match(Tag.READ);
                 code.emit(OpCode.invokestatic, 0); //invokestatic read()
                 match('(');
-                idlist();
+                idlist(Tag.READ);
                 match(')');
                 code.emit(OpCode.GOto, lnext); //GOTO L?
                 break;
@@ -126,12 +125,8 @@ public class Translator {
                 //S->while(BE)S
                 int lwhile;
                 match(Tag.WHILE);
-                if (lnext == 1) {
                     lwhile = code.newLabel();
                     code.emitLabel(lwhile);
-                } else {
-                    lwhile = lnext - 1;
-                }
                 match('(');
                 bexpr(lnext);
                 match(')');
@@ -140,28 +135,6 @@ public class Translator {
                 break;
             case Tag.IF:
                 //if(BE) S S' end
-                //if(< x 0) {...}
-                /*
-                    iload 0
-                    ilaod x
-                    isub
-                    if_lt stat():
-                    statp()
-                                 
-                    
-                    if
-                        bexpr(lstatp) < x 0
-                        if_ge lstatp
-                        stat(lstat)
-                    lstatp:
-                    else
-                        statp(lstat) --> goto lstat
-                    end
-                
-                    Lstat:
-                
-                
-                */
                 match(Tag.IF);
                 match('(');
                 int lstatp = code.newLabel(); //label dell'else (o nullo)
@@ -199,7 +172,7 @@ public class Translator {
         }
     }
 
-    private void idlist() {
+    private void idlist(int prevTag) {
         switch (look.tag) {
             case Tag.ID:
                 //IDL->ID IDL'
@@ -210,27 +183,33 @@ public class Translator {
                 }
                 match(Tag.ID);
                 code.emit(OpCode.istore, id_addr);
-                idlistp();
+                idlistp(prevTag,id_addr);
                 break;
             default:
                 error("error in idlist");
         }
     }
 
-    private void idlistp() {
+    private void idlistp(int prevTag, int prec_addr) {
         switch (look.tag) {
             case ',':
                 //IDL' -> , ID IDL'
                 match(',');
-                
                 int id_addr = st.lookupAddress(((Word) look).lexeme);
                     if (id_addr == -1) {
                         id_addr = count;
                         st.insert(((Word) look).lexeme, count++);
                     }
                 match(Tag.ID);
+
+                if (prevTag == Tag.READ)
+                    code.emit(OpCode.invokestatic, 0);
+
+                else if (prevTag == Tag.ASSIGN) {
+                    code.emit(OpCode.iload, prec_addr);
+                }
                 code.emit(OpCode.istore, id_addr);
-                idlistp();
+                idlistp(prevTag, id_addr);
                 break;
             case ')': 
             case Tag.ELSE:
@@ -246,32 +225,36 @@ public class Translator {
     }
 
     private void bexpr(int lfalse) { //label a cui andare se è false 
-       switch (look.tag) {
+        OpCode relop;
+        switch (look.tag) {
            case Tag.RELOP: //BE -> RELOP EE
                switch (((Word) look).lexeme) {
                    case "<":
-                    code.emit(OpCode.if_icmpge,lfalse);
+                    relop=OpCode.if_icmpge;
                        break;
                    case ">":
-                    code.emit(OpCode.if_icmple,lfalse);
+                    relop=OpCode.if_icmple;
                        break;
                    case "<=":
-                    code.emit(OpCode.if_icmpgt,lfalse);
+                    relop=OpCode.if_icmpgt;
                        break;
                    case ">=":
-                    code.emit(OpCode.if_icmplt,lfalse);
+                       relop = OpCode.if_icmplt;
                        break;
                    case "<>":
-                    code.emit(OpCode.if_icmpeq,lfalse);
+                       relop = OpCode.if_icmpeq;
                        break;
                    case "==":
-                    code.emit(OpCode.if_icmpne, lfalse);
-                       break;       
-                      
+                       relop = OpCode.if_icmpne;
+                       break;
+                   default:
+                       error(look.tag + "relop does not exist");
+                       relop = null;
                 }
                 match(Tag.RELOP);
                 expr();
                 expr();
+                code.emit(relop,lfalse);
             break;
             default:
                 error("error in bexpr");
@@ -280,15 +263,17 @@ public class Translator {
 
     private void expr() {
         switch (look.tag) {
-            // ... completare ...
 
             case '+':
                 //E->+(EL)
                 match('+');
                 match('(');
-                int iadd_n=exprlist();
+                int iadd_n = exprlist(look.tag);
                 match(')');
-                if(iadd_n!=1)code.emit(OpCode.iadd);
+                while (iadd_n-1 > 0) {
+                    code.emit(OpCode.iadd);
+                    iadd_n--;
+                }
                 break;
             case '-':
                 //E-> - E E
@@ -300,15 +285,18 @@ public class Translator {
             case '*': //E-> *(EL)
                 match('*');
                 match('(');
-                int imul_n=exprlist();
+                int imul_n = exprlist(look.tag);
                 match(')');
-                if(imul_n!=1)code.emit(OpCode.imul);
+                
+                while (imul_n-1 > 0) {
+                    code.emit(OpCode.imul);
+                    imul_n--;
+                }
                 break;
             case '/': //E-> / E E
                 match('/');
-                match('(');
-                exprlist();
-                match(')');
+                expr();
+                expr();
                 code.emit(OpCode.idiv);
                 break;
             case Tag.NUM:
@@ -328,7 +316,7 @@ public class Translator {
         }
     }
 
-     private int exprlist() { //ritorna il numero di valori di exprlist
+     private int exprlist(int prevTag) { //ritorna il numero di valori di exprlist
          int exprlist_n=0;
          switch (look.tag) {
             case '+':
@@ -340,7 +328,7 @@ public class Translator {
                 //EL -> E EL'
                 expr();
                 exprlist_n++; 
-                exprlist_n+=exprlistp();
+                exprlist_n += exprlistp(prevTag);
                 return exprlist_n;
             default:
                 error("error in exprlist");
@@ -348,15 +336,18 @@ public class Translator {
         }
     }
     // +(3,2,5)
-    private int exprlistp() {
+    private int exprlistp(int prevTag) {
         int exprlistp_n = 0;
         switch (look.tag) {
             case ',':
                 //EL' -> , E EL'
                 match(',');
+                if (prevTag == Tag.PRINT)
+                    code.emit(OpCode.invokestatic, 1);
+
                 expr();
                 exprlistp_n++; 
-                exprlistp_n+=exprlistp(); 
+                exprlistp_n+=exprlistp( prevTag); 
                 return exprlistp_n;
         case ')':
             //EL-> nullo 
